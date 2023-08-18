@@ -1,0 +1,144 @@
+module BankAccount where
+
+import DA.Date
+
+type BankAccountId = ContractId BankAccount
+type BankAccountKey = (Party, Party)
+
+data BankAccountDetails = BankAccountDetails
+  with
+    address : Text
+    contact_number : Int
+    email : Text
+    job_title : Optional Text
+    job_status : Optional Text
+  deriving (Show, Eq)
+
+template BankAccount
+  with
+    bank : Party
+    owner : Party
+    balance : Decimal
+    classification : Text
+    dormant : Bool
+    details : BankAccountDetails
+  where
+    signatory bank, owner
+    ensure bank /= owner
+
+    key (bank, owner) : BankAccountKey
+    maintainer key._1
+
+    nonconsuming choice GetAccountDetails : BankAccountDetails
+      controller bank
+      do
+        return(details)  
+    choice Withdraw : BankAccountId
+      with
+        ammount : Decimal
+      controller owner
+      do
+        time <- getTime
+        let newDate = toDateUTC time
+        create Transactions with debit = 0.0, credit = ammount, balance = balance - ammount, timestamp = newDate, ..
+        create BankAccount with balance = balance - ammount, ..
+    choice Deposit : BankAccountId
+      with
+        ammount : Decimal
+      controller owner
+      do
+        time <- getTime
+        let newDate = toDateUTC time
+        create Transactions with debit = ammount, credit = 0.0, balance = balance + ammount, timestamp = newDate,  ..
+        create this with balance = balance + ammount
+    nonconsuming choice RequestBalanceTransfer : ContractId TransferBalanceRequest
+      with
+        recipient : Party
+        transfer_ammount : Decimal
+        remarks : Text
+      controller owner
+      do
+        (ownerCid, ownerC) <- fetchByKey @BankAccount (bank, owner)
+        exercise ownerCid Withdraw with ammount = transfer_ammount
+        create TransferBalanceRequest with ..
+       
+
+template OpenBankAccount
+  with
+    owner : Party
+    bank : Party
+    initial_deposit : Decimal
+    details : BankAccountDetails
+  where
+    observer bank
+    signatory owner
+    ensure initial_deposit > 0.0
+    choice IssueBankAccount : BankAccountId
+      with
+        classification: Text
+      controller bank
+      do
+        time <- getTime
+        let newDate = toDateUTC time
+        create Transactions with debit = initial_deposit, credit = 0.0, balance = initial_deposit, timestamp = newDate, ..
+        create BankAccount with balance = initial_deposit, dormant = False, ..
+    choice RejectBankAccount : ContractId RejectedBankAccount
+      with
+        classification: Text
+        feedback: Text
+      controller bank
+      do
+        create RejectedBankAccount with ..
+
+
+template RejectedBankAccount
+  with
+    owner: Party
+    bank: Party
+    classification: Text
+    feedback: Text
+    details : BankAccountDetails
+  where
+    signatory owner, bank
+    choice RevisedBankAccountRequest : ContractId OpenBankAccount
+      with
+        initial_deposit : Decimal
+      controller owner
+      do
+        create OpenBankAccount with ..
+
+
+template Transactions
+  with
+    timestamp : Date
+    bank : Party
+    owner : Party
+    debit : Decimal
+    credit : Decimal
+    balance : Decimal
+  where
+    ensure bank /= owner && debit >= 0.0 && credit >= 0.0
+    signatory bank, owner
+
+
+template TransferBalanceRequest
+  with
+    bank: Party
+    owner: Party
+    recipient : Party
+    transfer_ammount : Decimal
+    remarks : Text
+  where
+    observer recipient
+    signatory owner, bank
+    choice AcceptBalanceTransfer : BankAccountId
+      controller recipient
+      do
+        (recipientCid, recipientC) <- fetchByKey @BankAccount (bank, recipient)
+        exercise recipientCid Deposit with ammount = transfer_ammount
+    choice CancelBalanceTransfer : ()
+      controller owner
+      do
+        (ownerCid, ownerC) <- fetchByKey @BankAccount (bank, owner)
+        exercise ownerCid Deposit with ammount = transfer_ammount
+        return ()
