@@ -1,44 +1,79 @@
 module Main where
 
+import BankAccount
 import Daml.Script
 
-type AssetId = ContractId Asset
-
-template Asset
-  with
-    issuer : Party
-    owner  : Party
-    name   : Text
-  where
-    ensure name /= ""
-    signatory issuer
-    observer owner
-    choice Give : AssetId
-      with
-        newOwner : Party
-      controller owner
-      do create this with
-           owner = newOwner
-
-setup : Script AssetId
+setup : Script ()
 setup = script do
--- user_setup_begin
-  alice <- allocatePartyWithHint "Alice" (PartyIdHint "Alice")
-  bob <- allocatePartyWithHint "Bob" (PartyIdHint "Bob")
-  aliceId <- validateUserId "alice"
-  bobId <- validateUserId "bob"
-  createUser (User aliceId (Some alice)) [CanActAs alice]
-  createUser (User bobId (Some bob)) [CanActAs bob]
--- user_setup_end
 
-  aliceTV <- submit alice do
-    createCmd Asset with
-      issuer = alice
-      owner = alice
-      name = "TV"
+  -- BANK PARTES
+  bdo <- allocatePartyWithHint "BDO Baguio" (PartyIdHint "BDO")
+  bpi <- allocatePartyWithHint "BPI Mangaldan" (PartyIdHint "BPI")
+  bdoId <- validateUserId "bdo"
+  bpiId <- validateUserId "bpi"
+  createUser (User bdoId (Some bdo)) [CanActAs bdo]
+  createUser (User bpiId (Some bpi)) [CanActAs bpi]
 
-  bobTV <- submit alice do
-    exerciseCmd aliceTV Give with newOwner = bob
+  -- USERS PARTIES
+  juan <- allocatePartyWithHint "Juan Dela Cruz" (PartyIdHint "Juan")
+  topher <- allocatePartyWithHint "Christopher Bermudez" (PartyIdHint "Topher")
+  juanId <- validateUserId "juan"
+  topherId <- validateUserId "topher"
+  createUser (User juanId (Some juan)) [CanActAs juan]
+  createUser (User topherId (Some topher)) [CanActAs topher]
 
-  submit bob do
-    exerciseCmd bobTV Give with newOwner = alice
+  
+  -- SCENARIO: Juan and Topher is creating a bank account
+  -- UNHAPPY PATH: Juan attempts to open a bank account but inital deposit is too low and got rejected by the bank.
+  let juan_details = BankAccountDetails with address = "Secret St. Placefull, of_rainbows, Philippines ", contact_number = 09100101101, email = "qweqweqewqwe", job_status = None, job_title = None
+  submitMustFail juan do createCmd OpenBankAccount with owner = juan, bank = bpi, initial_deposit = 0.0,  details = juan_details
+  juan_BankAccountRequest <- submit juan do createCmd OpenBankAccount with owner = juan, bank = bdo, initial_deposit = 150.00, details = juan_details
+  bdo_RejectedAccount <- submit bdo do exerciseCmd juan_BankAccountRequest RejectBankAccount with classification = "Savings", feedback = "Intial Deposit is too low for your savings account. Our minimum initial deposit is 2000"
+ 
+  -- HAPPY PATH: Juan Revised his account based on the bank's feedback and finally got issued an account by the bank.
+  juan_BankAccountRequest <- submit juan do exerciseCmd bdo_RejectedAccount RevisedBankAccountRequest with initial_deposit = 2500.00
+  juan_BankAccount <- submit bdo do exerciseCmd juan_BankAccountRequest IssueBankAccount with classification = "Savings"
+  
+  -- HAPPY PATH: Topher opening a bank account and got issued by the bank without problems
+  let topher_details = BankAccountDetails with address = "Mangaldan, Pangasinan, Philippines", contact_number = 09995753343, email = "qweqweqewqwe", job_status = Some "Private - Employed", job_title = Some "Full Stack Developer"
+  topher_BankAccountRequest <- submit topher do createCmd OpenBankAccount with owner = topher, bank = bdo, initial_deposit = 5000.00, details = topher_details
+  topher_BankAccount <- submit bdo do exerciseCmd topher_BankAccountRequest IssueBankAccount with classification = "Savings"
+  -- END SCENARIO
+
+
+  -- SCENARIO: Juan and Topher performing withdrawal and deposit on their accounts
+  -- HAPPY PATH
+  juan_BankAccount <- submit juan do exerciseCmd juan_BankAccount Deposit with amount = 24050.00
+  juan_BankAccount <- submit juan do exerciseCmd juan_BankAccount Withdraw with amount = 5800.00
+  juan_BankAccount <- submit juan do exerciseCmd juan_BankAccount Withdraw with amount = 10690.00
+  juan_BankAccount <- submit juan do exerciseCmd juan_BankAccount Withdraw with amount = 3069.00
+  topher_BankAccount <- submit topher do exerciseCmd topher_BankAccount Withdraw with amount = 3500.00
+  topher_BankAccount <- submit topher do exerciseCmd topher_BankAccount Deposit with amount = 23500.00
+  topher_BankAccount <- submit topher do exerciseCmd topher_BankAccount Withdraw with amount = 3150.00
+  -- UNHAPPY PATH : Juan attempts to withdraw a large amount of funds that he does not have.
+  submitMustFail juan do exerciseCmd juan_BankAccount Withdraw with amount = 999999999.99
+  -- UNHAPPY PATH : Topher attempts to deposit a negative amount of funds
+  submitMustFail topher do exerciseCmd topher_BankAccount Deposit with amount = -999.99
+  -- END SCENRAIO
+  
+
+  -- Bank just getting and checking topher's bank details 
+  topher_details <- submit bdo do exerciseCmd topher_BankAccount GetAccountDetails
+  debug $ "Topher's Bank Account Details: "  <> show (topher_details)
+
+
+  -- SCENARIO: Juan and Topher performing fund transfer to each other
+  -- UNHAPPY PATH for Juan: Topher initiates a balance transfer to juan but got cancelled by topher
+  topher_BalanceTransferRequest <- submit topher do exerciseCmd topher_BankAccount RequestBalanceTransfer with recipient = juan, transfer_amount = 1569.69, remarks = "You want???"
+  submit topher do exerciseCmd topher_BalanceTransferRequest CancelBalanceTransfer
+  -- HAPPY PATH: 
+  juan_BalanceTransferRequest <- submit juan do exerciseCmd juan_BankAccount RequestBalanceTransfer with recipient = topher, transfer_amount = 149.99, remarks = "Wampipti"
+  topher_BankAccount <- submit topher do exerciseCmd juan_BalanceTransferRequest AcceptBalanceTransfer
+  topher_BalanceTransferRequest <- submit topher do exerciseCmd topher_BankAccount RequestBalanceTransfer with recipient = juan, transfer_amount = 150.69, remarks = ";) ;)"
+  juan_BankAccount <- submit juan do exerciseCmd topher_BalanceTransferRequest AcceptBalanceTransfer
+  -- UNHAPPY PATH: Juan attempts to transfer a large amount of funds that he does not have
+  submitMustFail juan do exerciseCmd juan_BankAccount RequestBalanceTransfer with recipient = juan, transfer_amount = 9999999.99, remarks = "Hack Test"
+  -- END SCENARIO
+
+
+  pure()
