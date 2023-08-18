@@ -35,33 +35,36 @@ template BankAccount
         return(details)  
     choice Withdraw : BankAccountId
       with
-        ammount : Decimal
+        amount : Decimal
       controller owner
       do
+        assertMsg "Cannot withdraw due to Insufficient Funds" (amount < balance)
         time <- getTime
         let newDate = toDateUTC time
-        create Transactions with debit = 0.0, credit = ammount, balance = balance - ammount, timestamp = newDate, ..
-        create BankAccount with balance = balance - ammount, ..
+        create Transactions with debit = 0.0, credit = amount, balance = balance - amount, timestamp = newDate, ..
+        create BankAccount with balance = balance - amount, ..
     choice Deposit : BankAccountId
       with
-        ammount : Decimal
+        amount : Decimal
       controller owner
       do
+        assertMsg "Cannot deposit negative funds" (amount >= 0.0)
         time <- getTime
         let newDate = toDateUTC time
-        create Transactions with debit = ammount, credit = 0.0, balance = balance + ammount, timestamp = newDate,  ..
-        create this with balance = balance + ammount
+        create Transactions with debit = amount, credit = 0.0, balance = balance + amount, timestamp = newDate,  ..
+        create this with balance = balance + amount
     nonconsuming choice RequestBalanceTransfer : ContractId TransferBalanceRequest
       with
         recipient : Party
-        transfer_ammount : Decimal
+        transfer_amount : Decimal
         remarks : Text
       controller owner
       do
+        assertMsg "Cannot transfer due to Insufficient Funds" (transfer_amount < balance)
         (ownerCid, ownerC) <- fetchByKey @BankAccount (bank, owner)
-        exercise ownerCid Withdraw with ammount = transfer_ammount
+        exercise ownerCid Withdraw with amount = transfer_amount
         create TransferBalanceRequest with ..
-       
+
 
 template OpenBankAccount
   with
@@ -108,6 +111,7 @@ template RejectedBankAccount
         create OpenBankAccount with ..
 
 
+-- Transaction History for every transaction made.
 template Transactions
   with
     timestamp : Date
@@ -126,19 +130,20 @@ template TransferBalanceRequest
     bank: Party
     owner: Party
     recipient : Party
-    transfer_ammount : Decimal
+    transfer_amount : Decimal
     remarks : Text
   where
     observer recipient
     signatory owner, bank
+    ensure transfer_amount > 0.0 && owner /= recipient
     choice AcceptBalanceTransfer : BankAccountId
       controller recipient
       do
         (recipientCid, recipientC) <- fetchByKey @BankAccount (bank, recipient)
-        exercise recipientCid Deposit with ammount = transfer_ammount
+        exercise recipientCid Deposit with amount = transfer_amount
     choice CancelBalanceTransfer : ()
       controller owner
       do
         (ownerCid, ownerC) <- fetchByKey @BankAccount (bank, owner)
-        exercise ownerCid Deposit with ammount = transfer_ammount
+        exercise ownerCid Deposit with amount = transfer_amount
         return ()
